@@ -28,8 +28,42 @@ static void test_parse_null(){
     EXPECT_EQ_INT(DULL_NULL, dull_get_type(&v));
 }
 
+static void test_parse_false(){
+    dull_value v;
+    v.type = DULL_TRUE;
+
+    EXPECT_EQ_INT(DULL_PARSE_OK, dull_parse(&v, "false"));
+    EXPECT_EQ_INT(DULL_FALSE, dull_get_type(&v));
+}
+
+static void test_parse_true(){
+    dull_value v;
+    v.type = DULL_FALSE;
+
+    EXPECT_EQ_INT(DULL_PARSE_OK, dull_parse(&v, "true"));
+    EXPECT_EQ_INT(DULL_TRUE, dull_get_type(&v));
+}
+
+static void test_parse_invalid_value(){
+    dull_value v;
+    v.type = DULL_TRUE;
+
+    EXPECT_EQ_INT(DULL_PARSE_INVALID_VALUE, dull_parse(&v, "mmm"));
+}
+
+static void test_parse_root_not_singular(){
+    dull_value v;
+    v.type = DULL_TRUE;
+
+    EXPECT_EQ_INT(DULL_PARSE_INVALID_VALUE, dull_parse(&v, "mmm dd"));
+}
+
 static void test_parse(){
     test_parse_null();
+    test_parse_false();
+    test_parse_true();
+    test_parse_invalid_value();
+    test_parse_root_not_singular();
 }
 
 int main(){
