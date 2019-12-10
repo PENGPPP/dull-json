@@ -3,15 +3,35 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <errno.h>
+#include <math.h>
 
-// JSON-text = ws value ws
-// ws = *(%x20 / %x09 / %x0A / %x0D)
-// value = null / false / true 
-// null  = "null"
-// false = "false"
-// true  = "true"
+#define EXPECT(c, ch) do{ assert(*c->json == (ch)); c->json++; }while(0)
 
-// #define EXPECT(c, ch) do{ assert(*c->json == (ch)); c->json++; }while(0)
+#define ISDIGIT(ch) ((ch) >= '0' && (ch) <= '9')
+#define ISDIGIT1TO9(ch) ((ch) >= '1' && (ch) <= '9')
+#define PUTC(c, ch) do{*(char*)dull_context_push((c), sizeof((ch))) = (ch);} while(0)
+#define STRING_ERROR(ret) do { c->top = head; return ret; } while(0)
+
+#ifndef LEPT_PARSE_STACK_INIT_SIZE
+#define LEPT_PARSE_STACK_INIT_SIZE 256
+#endif
+
+typedef struct
+{
+    const char* json;
+    char* stack;
+    size_t top, size;
+} dull_context;
+
+
+void dull_free(dull_value* v)
+{
+    assert(v != NULL);
+    if(v->type == DULL_STRING)
+        free(v->u.s.s);
+    v->type = DULL_NULL;
+}
 
 static void dull_parse_whitespace(dull_context* c)
 {
@@ -21,23 +41,11 @@ static void dull_parse_whitespace(dull_context* c)
     c->json = p;
 }
 
-// static int dull_parse_null(dull_context* c, dull_value* v)
-// {
-//     EXPECT(c, "n");
-//     if(c->json[0] != 'u' || c->json[1] != 'l' || c->json[2] != 'l')
-//         return DULL_PARSE_INVALID_VALUE;
-    
-//     c->json += 3;
-//     v->type = DULL_NULL;
-
-//     return DULL_PARSE_OK;
-// }
-
 static int dull_parse_literal(dull_context* c, dull_value* v, const char* literal, dull_type t)
 {
     assert(literal != NULL);
     
-    int index = 0;
+    size_t index = 0;
     int size = strlen(literal);
     int c_size = strlen(c->json);
 
@@ -55,6 +63,211 @@ static int dull_parse_literal(dull_context* c, dull_value* v, const char* litera
     return DULL_PARSE_OK;
 }
 
+static int dull_parse_number(dull_context* c, dull_value* v)
+{
+    const char* p = c->json;
+    if(*p == '-') p++;
+    if(*p == '0') p++;
+    else
+    {
+        if(!ISDIGIT1TO9(*p)) return DULL_PARSE_INVALID_VALUE;
+        for(p++; ISDIGIT(*p); p++);
+    }
+
+    if(*p == '.')
+    {
+        p++;
+        if(!ISDIGIT(*p)) return DULL_PARSE_INVALID_VALUE;
+        for(p++; ISDIGIT(*p); p++);
+    }
+
+    if(*p == 'e' || *p == 'E')
+    {
+        p++;
+        if(*p == '-' || *p == '+') p++;
+        if(!ISDIGIT(*p)) return DULL_PARSE_INVALID_VALUE;
+        for(p++; ISDIGIT(*p); p++);
+    }
+        
+    errno = 0;
+    v->u.n = strtod(c->json, NULL);
+    if (errno == ERANGE && (v->u.n == HUGE_VAL || v->u.n == -HUGE_VAL))
+        return DULL_PARSE_NUMBER_TOO_BIG;
+    v->type = DULL_NUMBER;
+    c->json = p;
+    return DULL_PARSE_OK;
+}
+
+void dull_set_boolean(dull_value* v, int b)
+{
+    assert(v != NULL && (v->type == DULL_TRUE && v->type == DULL_FALSE));
+    dull_free(v);
+    v->type = b ? DULL_TRUE : DULL_FALSE;
+}
+
+int dull_get_boolean(const dull_value* v)
+{
+    assert(v != NULL && (v->type == DULL_TRUE && v->type == DULL_FALSE));
+    return 1;
+}
+
+void dull_set_number(dull_value*v, double b)
+{
+    assert(v !=NULL && v->type == DULL_NUMBER);
+    dull_free(v);
+    v->u.n = b;
+}
+
+double dull_get_number(const dull_value* v)
+{
+    assert(v !=NULL && v->type == DULL_NUMBER);
+    return v->u.n;
+}
+
+const char* dull_get_string(const dull_value* v)
+{
+    assert(v !=NULL && v->type == DULL_STRING);
+    return v->u.s.s;
+}
+
+void dull_set_string(dull_value* v, const char* c, size_t len)
+{
+    assert(v != NULL && (c != NULL || len == 0));
+    dull_free(v);
+    v->u.s.s = (char*)malloc(len + 1);
+    memcpy(v->u.s.s, c, len);
+    v->u.s.s[len] = '\0';
+    v->u.s.len = len;
+    v->type = DULL_STRING;
+}
+
+int dull_get_string_len(dull_value* v)
+{
+    assert(v!= NULL && v->type == DULL_STRING);
+    return v->u.s.len;
+}
+
+static void* dull_context_push(dull_context* c, size_t size)
+{
+    assert(c != NULL && size > 0);
+
+    void* ret;
+    if (c->top + size >= c->size)
+    {
+        if(c->size == 0)
+            c->size = LEPT_PARSE_STACK_INIT_SIZE;
+
+        while(c->top + size >= c->size)
+            c->size += c->size  >> 1;
+            
+        c->stack = (char*)realloc(c->stack, c->size);
+    }
+
+    ret = c->stack + c->top;
+    c->top += size;
+    return ret;
+}
+
+static void* dull_context_pop(dull_context* c, size_t size)
+{
+    assert(c != NULL && size > 0);
+    return c->stack + (c->top-=size);
+}
+
+static const char* dull_parse_hex4(const char* p, unsigned* u)
+{
+    int i;
+    *u = 0;
+    for (i = 0; i < 4; i++) {
+        char ch = *p++;
+        *u <<= 4;
+        if      (ch >= '0' && ch <= '9')  *u |= ch - '0';
+        else if (ch >= 'A' && ch <= 'F')  *u |= ch - ('A' - 10);
+        else if (ch >= 'a' && ch <= 'f')  *u |= ch - ('a' - 10);
+        else return NULL;
+    }
+    return p;
+}
+
+static void dull_encode_utf8(dull_context* c, unsigned u) {
+    if (u <= 0x7F) 
+        PUTC(c, u & 0xFF);
+    else if (u <= 0x7FF) {
+        PUTC(c, 0xC0 | ((u >> 6) & 0xFF));
+        PUTC(c, 0x80 | ( u       & 0x3F));
+    }
+    else if (u <= 0xFFFF) {
+        PUTC(c, 0xE0 | ((u >> 12) & 0xFF));
+        PUTC(c, 0x80 | ((u >>  6) & 0x3F));
+        PUTC(c, 0x80 | ( u        & 0x3F));
+    }
+    else {
+        assert(u <= 0x10FFFF);
+        PUTC(c, 0xF0 | ((u >> 18) & 0xFF));
+        PUTC(c, 0x80 | ((u >> 12) & 0x3F));
+        PUTC(c, 0x80 | ((u >>  6) & 0x3F));
+        PUTC(c, 0x80 | ( u        & 0x3F));
+    }
+}
+
+static int dull_parse_string(dull_context* c, dull_value* v)
+{
+    size_t head = c->top, len;
+    EXPECT(c, '\"');
+    const char* p = c->json;
+    unsigned u, u2;
+
+    for(;;)
+    {
+        char ch = *p++;
+        switch(ch)
+        {
+            case '\"':
+                len = c->top - head;
+                dull_set_string(v, (const char*)dull_context_pop(c, len), len);
+                c->json = p;
+                return DULL_PARSE_OK;
+            case '\\':
+                switch (*p++)
+                {
+                    case '\"': PUTC(c, '\"'); break;
+                    case '\\': PUTC(c, '\\'); break;
+                    case '/': PUTC(c, '/'); break;
+                    case 'b': PUTC(c, '\b'); break;
+                    case 'f': PUTC(c, '\f'); break;
+                    case 'n': PUTC(c, '\n'); break;
+                    case 'r': PUTC(c, '\r'); break;
+                    case 't': PUTC(c, '\t'); break;
+                    case 'u':
+                        if (!(p = dull_parse_hex4(p, &u)))
+                            STRING_ERROR(DULL_PARSE_INVALID_UNICODE_HEX);
+                        if (u >= 0xD800 && u <= 0xDBFF) { /* surrogate pair */
+                            if (*p++ != '\\')
+                                STRING_ERROR(DULL_PARSE_INVALID_UNICODE_SURROGATE);
+                            if (*p++ != 'u')
+                                STRING_ERROR(DULL_PARSE_INVALID_UNICODE_SURROGATE);
+                            if (!(p = dull_parse_hex4(p, &u2)))
+                                STRING_ERROR(DULL_PARSE_INVALID_UNICODE_HEX);
+                            if (u2 < 0xDC00 || u2 > 0xDFFF)
+                                STRING_ERROR(DULL_PARSE_INVALID_UNICODE_SURROGATE);
+                            u = (((u - 0xD800) << 10) | (u2 - 0xDC00)) + 0x10000;
+                        }
+                        dull_encode_utf8(c, u);
+                        break;
+                    default:
+                        STRING_ERROR(DULL_PARSE_INVALID_STRING_ESCAPE);
+                }
+                break;
+            case '\0': 
+                STRING_ERROR(DULL_PARSE_INVALID_STRING_ESCAPE);
+            default : 
+                if ((unsigned char)ch < 0x20)
+                    STRING_ERROR(DULL_PARSE_INVALID_STRING_ESCAPE);
+                PUTC(c, ch);
+        }
+    }
+}
+
 static int dull_parse_value(dull_context* c, dull_value* v)
 {
     switch (*c->json)
@@ -62,16 +275,21 @@ static int dull_parse_value(dull_context* c, dull_value* v)
         case 'n': return dull_parse_literal(c, v, "null", DULL_NULL);
         case 't': return dull_parse_literal(c, v, "true", DULL_TRUE);
         case 'f': return dull_parse_literal(c, v, "false", DULL_FALSE);
+        case '"' : return dull_parse_string(c, v);
+        default : return dull_parse_number(c, v);
         case '\0': return DULL_PARSE_EXPECT_VALUE;
-        default: return DULL_PARSE_INVALID_VALUE;
     }
 }
 
 int dull_parse(dull_value* v, const char* json)
 {
+    assert(v != NULL);
+
     dull_context c;
     c.json = json;
-    v->type = DULL_NULL;
+    c.stack = NULL;
+    c.size = c.top = 0;
+    DULL_INIT(v);
     dull_parse_whitespace(&c);
     int ret;
     if((ret = dull_parse_value(&c, v)) == DULL_PARSE_OK)
@@ -79,10 +297,14 @@ int dull_parse(dull_value* v, const char* json)
         dull_parse_whitespace(&c);
         if (*c.json != '\0')
         {   
-            return DULL_PARSE_ROOT_NOT_SINGULAR;
+            v->type = DULL_NULL;
+            ret = DULL_PARSE_ROOT_NOT_SINGULAR;
         }
         
     }
+    assert(c.top == 0);
+    free(c.stack);
+
     return ret;
 }
 
