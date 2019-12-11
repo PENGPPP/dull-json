@@ -4,18 +4,21 @@
 #include <stddef.h>
 
 #define DULL_INIT(v) do{(v)->type = DULL_NULL;}while(0)
+#define dull_set_null(v) dull_free(v)
 
-typedef enum {DULL_NULL, DULL_TRUE, DULL_FALSE, DULL_NUMBER, DULL_STRING, DULL_ARRAY, DULL_OBJECT} dull_type;
+typedef enum {DULL_NULL, DULL_FALSE, DULL_TRUE, DULL_NUMBER, DULL_STRING, DULL_ARRAY, DULL_OBJECT} dull_type;
 
-typedef struct 
+typedef struct dull_value dull_value;
+struct dull_value
 {
     dull_type type;
     union
     {
+        struct { dull_value* e; size_t size;} a;
         struct { char* s; size_t len; } s;
         double n;
     } u;
-} dull_value;
+};
 
 enum {
     DULL_PARSE_OK = 0,
@@ -27,7 +30,8 @@ enum {
     DULL_PARSE_INVALID_STRING_ESCAPE,
     DULL_PARSE_INVALID_STRING_CHAR,
     DULL_PARSE_INVALID_UNICODE_HEX,
-    DULL_PARSE_INVALID_UNICODE_SURROGATE
+    DULL_PARSE_INVALID_UNICODE_SURROGATE,
+    DULL_PARSE_MISS_COMMA_OR_SQUARE_BRACKET
 };
 
 int dull_parse(dull_value* v, const char* json);
@@ -44,5 +48,8 @@ int dull_get_string_length(const dull_value* v);
 void dull_set_string(dull_value* v, const char* c, size_t len);
 
 void dull_free(dull_value* v);
+
+size_t dull_get_array_size(dull_value* v);
+dull_value* dull_get_array_element(dull_value* v, size_t index);
 
 #endif /* DULLJSON_H__ */

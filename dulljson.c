@@ -10,7 +10,7 @@
 
 #define ISDIGIT(ch) ((ch) >= '0' && (ch) <= '9')
 #define ISDIGIT1TO9(ch) ((ch) >= '1' && (ch) <= '9')
-#define PUTC(c, ch) do{*(char*)dull_context_push((c), sizeof((ch))) = (ch);} while(0)
+#define PUTC(c, ch) do{*(char*)dull_context_push((c), sizeof(char)) = (ch);} while(0)
 #define STRING_ERROR(ret) do { c->top = head; return ret; } while(0)
 
 #ifndef LEPT_PARSE_STACK_INIT_SIZE
@@ -28,8 +28,19 @@ typedef struct
 void dull_free(dull_value* v)
 {
     assert(v != NULL);
-    if(v->type == DULL_STRING)
+    switch (v->type)
+    {
+    case DULL_STRING:
         free(v->u.s.s);
+        break;
+    case DULL_ARRAY:
+        for(int i = 0 ; i < v->u.a.size; i++)
+            dull_free(&v->u.a.e[i]);
+        free(v->u.a.e);
+        break;
+    default:
+        break;
+    }
     v->type = DULL_NULL;
 }
 
@@ -61,6 +72,14 @@ static int dull_parse_literal(dull_context* c, dull_value* v, const char* litera
     c->json += size;
     v->type = t;
     return DULL_PARSE_OK;
+    // size_t i;
+    // EXPECT(c, literal[0]);
+    // for (i = 0; literal[i + 1]; i++)
+    //     if (c->json[i] != literal[i + 1])
+    //         return DULL_PARSE_INVALID_VALUE;
+    // c->json += i;
+    // v->type = t;
+    // return DULL_PARSE_OK;
 }
 
 static int dull_parse_number(dull_context* c, dull_value* v)
@@ -100,22 +119,23 @@ static int dull_parse_number(dull_context* c, dull_value* v)
 
 void dull_set_boolean(dull_value* v, int b)
 {
-    assert(v != NULL && (v->type == DULL_TRUE && v->type == DULL_FALSE));
+    assert(v != NULL);
     dull_free(v);
     v->type = b ? DULL_TRUE : DULL_FALSE;
 }
 
 int dull_get_boolean(const dull_value* v)
 {
-    assert(v != NULL && (v->type == DULL_TRUE && v->type == DULL_FALSE));
-    return 1;
+    assert(v != NULL && (v->type == DULL_TRUE || v->type == DULL_FALSE));
+    return v->type == DULL_TRUE;
 }
 
 void dull_set_number(dull_value*v, double b)
 {
-    assert(v !=NULL && v->type == DULL_NUMBER);
+    assert(v !=NULL);
     dull_free(v);
     v->u.n = b;
+    v->type = DULL_NUMBER;
 }
 
 double dull_get_number(const dull_value* v)
@@ -128,6 +148,12 @@ const char* dull_get_string(const dull_value* v)
 {
     assert(v !=NULL && v->type == DULL_STRING);
     return v->u.s.s;
+}
+
+int dull_get_string_length(const dull_value* v)
+{
+    assert(v != NULL && v->type == DULL_STRING);
+    return v->u.s.len;
 }
 
 void dull_set_string(dull_value* v, const char* c, size_t len)
@@ -170,7 +196,7 @@ static void* dull_context_push(dull_context* c, size_t size)
 
 static void* dull_context_pop(dull_context* c, size_t size)
 {
-    assert(c != NULL && size > 0);
+    assert(c != NULL && size >= 0);
     return c->stack + (c->top-=size);
 }
 
@@ -224,7 +250,8 @@ static int dull_parse_string(dull_context* c, dull_value* v)
         {
             case '\"':
                 len = c->top - head;
-                dull_set_string(v, (const char*)dull_context_pop(c, len), len);
+                const char* tc = (const char*)dull_context_pop(c, len);
+                dull_set_string(v, tc, len);
                 c->json = p;
                 return DULL_PARSE_OK;
             case '\\':
@@ -259,14 +286,16 @@ static int dull_parse_string(dull_context* c, dull_value* v)
                 }
                 break;
             case '\0': 
-                STRING_ERROR(DULL_PARSE_INVALID_STRING_ESCAPE);
+                STRING_ERROR(DULL_PARSE_MISS_QUOTATION_MARK);
             default : 
                 if ((unsigned char)ch < 0x20)
-                    STRING_ERROR(DULL_PARSE_INVALID_STRING_ESCAPE);
+                    STRING_ERROR(DULL_PARSE_INVALID_STRING_CHAR);
                 PUTC(c, ch);
         }
     }
 }
+
+static int dull_parse_array(dull_context* c, dull_value* v);
 
 static int dull_parse_value(dull_context* c, dull_value* v)
 {
@@ -276,9 +305,122 @@ static int dull_parse_value(dull_context* c, dull_value* v)
         case 't': return dull_parse_literal(c, v, "true", DULL_TRUE);
         case 'f': return dull_parse_literal(c, v, "false", DULL_FALSE);
         case '"' : return dull_parse_string(c, v);
+        case '[': return dull_parse_array(c, v);
         default : return dull_parse_number(c, v);
         case '\0': return DULL_PARSE_EXPECT_VALUE;
     }
+}
+
+// ["adb",[1,2],3,"c"]
+static int dull_parse_array(dull_context* c, dull_value* v)
+{
+    // size_t i, size = 0;
+    // int ret;
+    // EXPECT(c, '[');
+    // dull_parse_whitespace(c);
+    // if (*c->json == ']') {
+    //     c->json++;
+    //     v->type = DULL_ARRAY;
+    //     v->u.a.size = 0;
+    //     v->u.a.e = NULL;
+    //     return DULL_PARSE_OK;
+    // }
+    // for (;;) {
+    //     dull_value e;
+    //     DULL_INIT(&e);
+    //     if ((ret = dull_parse_value(c, &e)) != DULL_PARSE_OK)
+    //         break;
+    //     memcpy(dull_context_push(c, sizeof(dull_value)), &e, sizeof(dull_value));
+    //     size++;
+    //     dull_parse_whitespace(c);
+    //     if (*c->json == ',') {
+    //         c->json++;
+    //         dull_parse_whitespace(c);
+    //     }
+    //     else if (*c->json == ']') {
+    //         c->json++;
+    //         v->type = DULL_ARRAY;
+    //         v->u.a.size = size;
+    //         size *= sizeof(dull_value);
+    //         memcpy(v->u.a.e = (dull_value*)malloc(size), dull_context_pop(c, size), size);
+    //         return DULL_PARSE_OK;
+    //     }
+    //     else {
+    //         ret = DULL_PARSE_MISS_COMMA_OR_SQUARE_BRACKET;
+    //         break;
+    //     }
+    // }
+    // /* Pop and free values on the stack */
+    // for (i = 0; i < size; i++)
+    //     dull_free((dull_value*)dull_context_pop(c, sizeof(dull_value)));
+    // return ret;
+
+    EXPECT(c, '[');
+    dull_parse_whitespace(c);
+    if(*c->json == ']')
+    {
+        c->json++;
+        v->type = DULL_ARRAY;
+        v->u.a.e = NULL;
+        v->u.a.size = 0;
+        return DULL_PARSE_OK;
+    }
+
+    int ret, head = c->top;
+    size_t size = 0, len;
+    for(;;)
+    {
+        dull_value new_v;
+        DULL_INIT(&new_v);
+        dull_parse_whitespace(c);
+
+        if((ret = dull_parse_value(c, &new_v)) != DULL_PARSE_OK)
+            break;
+            
+        *(dull_value*)dull_context_push(c, sizeof(dull_value)) = new_v;
+        // memcpy(dull_context_push(c, sizeof(dull_value)), &new_v, sizeof(dull_value));
+        size++;
+
+        dull_parse_whitespace(c);
+        if(*c->json == ',')
+        {
+            c->json++;
+        }
+        else if(*c->json == ']')
+        {   
+            len = c->top - head;
+            v->u.a.e = (dull_value*)malloc(len);
+            memcpy(v->u.a.e,dull_context_pop(c, len), len);
+            v->u.a.size = size;
+            v->type = DULL_ARRAY;
+            c->json++;
+            return DULL_PARSE_OK;
+        }
+        else {
+            ret = DULL_PARSE_MISS_COMMA_OR_SQUARE_BRACKET;
+            break;
+        }
+    }
+
+    for (int i = 0; i < size; i++)
+        dull_free((dull_value*)dull_context_pop(c, sizeof(dull_value)));
+
+    c->top = head;
+    return ret;
+}
+
+size_t dull_get_array_size(dull_value* v)
+{
+    assert(v != NULL && v->type == DULL_ARRAY);
+    return v->u.a.size;
+}
+dull_value* dull_get_array_element(dull_value* v, size_t index)
+{
+    assert(v != NULL && v->type == DULL_ARRAY && index >=0);
+    if (index < v->u.a.size)
+        return v->u.a.e + index;
+    else
+        return NULL;
 }
 
 int dull_parse(dull_value* v, const char* json)
