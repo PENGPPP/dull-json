@@ -9,16 +9,26 @@
 typedef enum {DULL_NULL, DULL_FALSE, DULL_TRUE, DULL_NUMBER, DULL_STRING, DULL_ARRAY, DULL_OBJECT} dull_type;
 
 typedef struct dull_value dull_value;
+typedef struct dull_member dull_member;
 struct dull_value
 {
     dull_type type;
     union
     {
+        struct { dull_member* m; size_t size;} o;
         struct { dull_value* e; size_t size;} a;
         struct { char* s; size_t len; } s;
         double n;
     } u;
 };
+
+struct dull_member
+{
+    char* k;
+    size_t klen;
+    dull_value v;
+};
+
 
 enum {
     DULL_PARSE_OK = 0,
@@ -31,7 +41,10 @@ enum {
     DULL_PARSE_INVALID_STRING_CHAR,
     DULL_PARSE_INVALID_UNICODE_HEX,
     DULL_PARSE_INVALID_UNICODE_SURROGATE,
-    DULL_PARSE_MISS_COMMA_OR_SQUARE_BRACKET
+    DULL_PARSE_MISS_COMMA_OR_SQUARE_BRACKET,
+    DULL_PARSE_MISS_KEY,
+    DULL_PARSE_MISS_COLON,
+    DULL_PARSE_MISS_COMMA_OR_CURLY_BRACKET
 };
 
 int dull_parse(dull_value* v, const char* json);
@@ -51,5 +64,10 @@ void dull_free(dull_value* v);
 
 size_t dull_get_array_size(dull_value* v);
 dull_value* dull_get_array_element(dull_value* v, size_t index);
+
+size_t dull_get_object_size(const dull_value* v);
+const char* dull_get_object_key(const dull_value* v, size_t index);
+size_t dull_get_object_key_length(const dull_value* v, size_t index);
+dull_value* dull_get_object_value(const dull_value* v, size_t index);
 
 #endif /* DULLJSON_H__ */

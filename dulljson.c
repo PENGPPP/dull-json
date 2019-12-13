@@ -13,8 +13,8 @@
 #define PUTC(c, ch) do{*(char*)dull_context_push((c), sizeof(char)) = (ch);} while(0)
 #define STRING_ERROR(ret) do { c->top = head; return ret; } while(0)
 
-#ifndef LEPT_PARSE_STACK_INIT_SIZE
-#define LEPT_PARSE_STACK_INIT_SIZE 256
+#ifndef DULL_PARSE_STACK_INIT_SIZE
+#define DULL_PARSE_STACK_INIT_SIZE 256
 #endif
 
 typedef struct
@@ -37,6 +37,13 @@ void dull_free(dull_value* v)
         for(int i = 0 ; i < v->u.a.size; i++)
             dull_free(&v->u.a.e[i]);
         free(v->u.a.e);
+        break;
+    case DULL_OBJECT:
+        for (int i = 0; i < v->u.o.size; i++) {
+            free(v->u.o.m[i].k);
+            dull_free(&v->u.o.m[i].v);
+        }
+        free(v->u.o.m);
         break;
     default:
         break;
@@ -181,7 +188,7 @@ static void* dull_context_push(dull_context* c, size_t size)
     if (c->top + size >= c->size)
     {
         if(c->size == 0)
-            c->size = LEPT_PARSE_STACK_INIT_SIZE;
+            c->size = DULL_PARSE_STACK_INIT_SIZE;
 
         while(c->top + size >= c->size)
             c->size += c->size  >> 1;
@@ -236,9 +243,9 @@ static void dull_encode_utf8(dull_context* c, unsigned u) {
     }
 }
 
-static int dull_parse_string(dull_context* c, dull_value* v)
+static int dull_parse_string_raw(dull_context* c, char** str, size_t* len)
 {
-    size_t head = c->top, len;
+    size_t head = c->top;
     EXPECT(c, '\"');
     const char* p = c->json;
     unsigned u, u2;
@@ -249,9 +256,9 @@ static int dull_parse_string(dull_context* c, dull_value* v)
         switch(ch)
         {
             case '\"':
-                len = c->top - head;
-                const char* tc = (const char*)dull_context_pop(c, len);
-                dull_set_string(v, tc, len);
+                *len = c->top - head;
+                *str = dull_context_pop(c, *len);
+                // dull_set_string(v, tc, len);
                 c->json = p;
                 return DULL_PARSE_OK;
             case '\\':
@@ -295,6 +302,19 @@ static int dull_parse_string(dull_context* c, dull_value* v)
     }
 }
 
+static int dull_parse_string(dull_context* c, dull_value* v)
+{
+    size_t len;
+    char* str;
+    int ret;
+    if((ret = dull_parse_string_raw(c,&str, &len)) == DULL_PARSE_OK)
+        dull_set_string(v, str, len);
+
+    // printf("%d",ret);
+    return ret;
+}
+
+static int dull_parse_obj(dull_context* c, dull_value* v);
 static int dull_parse_array(dull_context* c, dull_value* v);
 
 static int dull_parse_value(dull_context* c, dull_value* v)
@@ -306,6 +326,7 @@ static int dull_parse_value(dull_context* c, dull_value* v)
         case 'f': return dull_parse_literal(c, v, "false", DULL_FALSE);
         case '"' : return dull_parse_string(c, v);
         case '[': return dull_parse_array(c, v);
+        case '{': return dull_parse_obj(c, v);
         default : return dull_parse_number(c, v);
         case '\0': return DULL_PARSE_EXPECT_VALUE;
     }
@@ -314,47 +335,6 @@ static int dull_parse_value(dull_context* c, dull_value* v)
 // ["adb",[1,2],3,"c"]
 static int dull_parse_array(dull_context* c, dull_value* v)
 {
-    // size_t i, size = 0;
-    // int ret;
-    // EXPECT(c, '[');
-    // dull_parse_whitespace(c);
-    // if (*c->json == ']') {
-    //     c->json++;
-    //     v->type = DULL_ARRAY;
-    //     v->u.a.size = 0;
-    //     v->u.a.e = NULL;
-    //     return DULL_PARSE_OK;
-    // }
-    // for (;;) {
-    //     dull_value e;
-    //     DULL_INIT(&e);
-    //     if ((ret = dull_parse_value(c, &e)) != DULL_PARSE_OK)
-    //         break;
-    //     memcpy(dull_context_push(c, sizeof(dull_value)), &e, sizeof(dull_value));
-    //     size++;
-    //     dull_parse_whitespace(c);
-    //     if (*c->json == ',') {
-    //         c->json++;
-    //         dull_parse_whitespace(c);
-    //     }
-    //     else if (*c->json == ']') {
-    //         c->json++;
-    //         v->type = DULL_ARRAY;
-    //         v->u.a.size = size;
-    //         size *= sizeof(dull_value);
-    //         memcpy(v->u.a.e = (dull_value*)malloc(size), dull_context_pop(c, size), size);
-    //         return DULL_PARSE_OK;
-    //     }
-    //     else {
-    //         ret = DULL_PARSE_MISS_COMMA_OR_SQUARE_BRACKET;
-    //         break;
-    //     }
-    // }
-    // /* Pop and free values on the stack */
-    // for (i = 0; i < size; i++)
-    //     dull_free((dull_value*)dull_context_pop(c, sizeof(dull_value)));
-    // return ret;
-
     EXPECT(c, '[');
     dull_parse_whitespace(c);
     if(*c->json == ']')
@@ -409,6 +389,73 @@ static int dull_parse_array(dull_context* c, dull_value* v)
     return ret;
 }
 
+static int dull_parse_obj(dull_context* c, dull_value* v)
+{
+    size_t i, size;
+    dull_member m;
+    int ret;
+    EXPECT(c, '{');
+    dull_parse_whitespace(c);
+    if (*c->json == '}') {
+        c->json++;
+        v->type = DULL_OBJECT;
+        v->u.o.m = 0;
+        v->u.o.size = 0;
+        return DULL_PARSE_OK;
+    }
+    m.k = NULL;
+    size = 0;
+    for (;;) {
+        char* str;
+        DULL_INIT(&m.v);
+        if (*c->json != '"') {
+            ret = DULL_PARSE_MISS_KEY;
+            break;
+        }
+        if ((ret = dull_parse_string_raw(c, &str, &m.klen)) != DULL_PARSE_OK)
+            break;
+        memcpy(m.k = (char*)malloc(m.klen + 1), str, m.klen);
+        m.k[m.klen] = '\0';
+        dull_parse_whitespace(c);
+        if (*c->json != ':') {
+            ret = DULL_PARSE_MISS_COLON;
+            break;
+        }
+        c->json++;
+        dull_parse_whitespace(c);
+        if ((ret = dull_parse_value(c, &m.v)) != DULL_PARSE_OK)
+            break;
+        memcpy(dull_context_push(c, sizeof(dull_member)), &m, sizeof(dull_member));
+        size++;
+        m.k = NULL; 
+        dull_parse_whitespace(c);
+        if (*c->json == ',') {
+            c->json++;
+            dull_parse_whitespace(c);
+        }
+        else if (*c->json == '}') {
+            size_t s = sizeof(dull_member) * size;
+            c->json++;
+            v->type = DULL_OBJECT;
+            v->u.o.size = size;
+            memcpy(v->u.o.m = (dull_member*)malloc(s), dull_context_pop(c, s), s);
+            return DULL_PARSE_OK;
+        }
+        else {
+            ret = DULL_PARSE_MISS_COMMA_OR_CURLY_BRACKET;
+            break;
+        }
+    }
+    free(m.k);
+    for (i = 0; i < size; i++) {
+        dull_member* m = (dull_member*)dull_context_pop(c, sizeof(dull_member));
+        free(m->k);
+        dull_free(&m->v);
+    }
+    v->type = DULL_NULL;
+    return ret;
+}
+
 size_t dull_get_array_size(dull_value* v)
 {
     assert(v != NULL && v->type == DULL_ARRAY);
@@ -454,4 +501,27 @@ dull_type dull_get_type(const dull_value* v)
 {
     assert(v != NULL);
     return v->type;
+}
+
+size_t dull_get_object_size(const dull_value* v) {
+    assert(v != NULL && v->type == DULL_OBJECT);
+    return v->u.o.size;
+}
+
+const char* dull_get_object_key(const dull_value* v, size_t index) {
+    assert(v != NULL && v->type == DULL_OBJECT);
+    assert(index < v->u.o.size);
+    return v->u.o.m[index].k;
+}
+
+size_t dull_get_object_key_length(const dull_value* v, size_t index) {
+    assert(v != NULL && v->type == DULL_OBJECT);
+    assert(index < v->u.o.size);
+    return v->u.o.m[index].klen;
+}
+
+dull_value* dull_get_object_value(const dull_value* v, size_t index) {
+    assert(v != NULL && v->type == DULL_OBJECT);
+    assert(index < v->u.o.size);
+    return &v->u.o.m[index].v;
 }

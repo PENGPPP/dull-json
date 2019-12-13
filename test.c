@@ -25,7 +25,7 @@ static int test_pass = 0;
 #define EXPECT_EQ_INT(expect, actual) EXPECT_EQ_BASE((expect) == (actual), expect, actual, "%d")
 #define EXPECT_EQ_DOUBLE(expect, actual) EXPECT_EQ_BASE((expect) == (actual), expect, actual, "%.17g")
 #define EXPECT_EQ_STRING(expect, actual, alength) \
-    EXPECT_EQ_BASE(sizeof(expect) - 1 == alength && memcmp(expect, actual, alength) == 0, expect, actual, "%s")
+    EXPECT_EQ_BASE(sizeof(expect) - 1 == alength && memcmp(expect, actual, alength + 1) == 0, expect, actual, "%s")
 #define EXPECT_TRUE(actual) EXPECT_EQ_BASE((actual) != 0, "true", "false", "%s")
 #define EXPECT_FALSE(actual) EXPECT_EQ_BASE((actual) == 0, "false", "true", "%s")
 
@@ -167,6 +167,65 @@ static void test_parse_array() {
     dull_free(&v);
 }
 
+static void test_parse_object() {
+    dull_value v;
+    size_t i;
+
+    DULL_INIT(&v);
+    EXPECT_EQ_INT(DULL_PARSE_OK, dull_parse(&v, " { } "));
+    EXPECT_EQ_INT(DULL_OBJECT, dull_get_type(&v));
+    EXPECT_EQ_SIZE_T(0, dull_get_object_size(&v));
+    dull_free(&v);
+
+    DULL_INIT(&v);
+    EXPECT_EQ_INT(DULL_PARSE_OK, dull_parse(&v,
+        " { "
+        "\"n\" : null , "
+        "\"f\" : false , "
+        "\"t\" : true , "
+        "\"i\" : 123 , "
+        "\"s\" : \"abc\", "
+        "\"a\" : [ 1, 2, 3 ],"
+        "\"o\" : { \"1\" : 1, \"2\" : 2, \"3\" : 3 }"
+        " } "
+    ));
+    EXPECT_EQ_INT(DULL_OBJECT, dull_get_type(&v));
+    EXPECT_EQ_SIZE_T(7, dull_get_object_size(&v));
+    EXPECT_EQ_STRING("n", dull_get_object_key(&v, 0), dull_get_object_key_length(&v, 0));
+    EXPECT_EQ_INT(DULL_NULL,   dull_get_type(dull_get_object_value(&v, 0)));
+    EXPECT_EQ_STRING("f", dull_get_object_key(&v, 1), dull_get_object_key_length(&v, 1));
+    EXPECT_EQ_INT(DULL_FALSE,  dull_get_type(dull_get_object_value(&v, 1)));
+    EXPECT_EQ_STRING("t", dull_get_object_key(&v, 2), dull_get_object_key_length(&v, 2));
+    EXPECT_EQ_INT(DULL_TRUE,   dull_get_type(dull_get_object_value(&v, 2)));
+    EXPECT_EQ_STRING("i", dull_get_object_key(&v, 3), dull_get_object_key_length(&v, 3));
+    EXPECT_EQ_INT(DULL_NUMBER, dull_get_type(dull_get_object_value(&v, 3)));
+    EXPECT_EQ_DOUBLE(123.0, dull_get_number(dull_get_object_value(&v, 3)));
+    EXPECT_EQ_STRING("s", dull_get_object_key(&v, 4), dull_get_object_key_length(&v, 4));
+    EXPECT_EQ_INT(DULL_STRING, dull_get_type(dull_get_object_value(&v, 4)));
+    EXPECT_EQ_STRING("abc", dull_get_string(dull_get_object_value(&v, 4)), dull_get_string_length(dull_get_object_value(&v, 4)));
+    EXPECT_EQ_STRING("a", dull_get_object_key(&v, 5), dull_get_object_key_length(&v, 5));
+    EXPECT_EQ_INT(DULL_ARRAY, dull_get_type(dull_get_object_value(&v, 5)));
+    EXPECT_EQ_SIZE_T(3, dull_get_array_size(dull_get_object_value(&v, 5)));
+    for (i = 0; i < 3; i++) {
+        dull_value* e = dull_get_array_element(dull_get_object_value(&v, 5), i);
+        EXPECT_EQ_INT(DULL_NUMBER, dull_get_type(e));
+        EXPECT_EQ_DOUBLE(i + 1.0, dull_get_number(e));
+    }
+    EXPECT_EQ_STRING("o", dull_get_object_key(&v, 6), dull_get_object_key_length(&v, 6));
+    {
+        dull_value* o = dull_get_object_value(&v, 6);
+        EXPECT_EQ_INT(DULL_OBJECT, dull_get_type(o));
+        for (i = 0; i < 3; i++) {
+            dull_value* ov = dull_get_object_value(o, i);
+            EXPECT_TRUE('1' + i == dull_get_object_key(o, i)[0]);
+            EXPECT_EQ_SIZE_T(1, dull_get_object_key_length(o, i));
+            EXPECT_EQ_INT(DULL_NUMBER, dull_get_type(ov));
+            EXPECT_EQ_DOUBLE(i + 1.0, dull_get_number(ov));
+        }
+    }
+    dull_free(&v);
+}
+
 #define TEST_ERROR(error, json)\
     do {\
         dull_value v;\
@@ -263,6 +322,29 @@ static void test_parse_miss_comma_or_square_bracket() {
     TEST_ERROR(DULL_PARSE_MISS_COMMA_OR_SQUARE_BRACKET, "[[]");
 }
 
+static void test_parse_miss_key() {
+    TEST_ERROR(DULL_PARSE_MISS_KEY, "{:1,");
+    TEST_ERROR(DULL_PARSE_MISS_KEY, "{1:1,");
+    TEST_ERROR(DULL_PARSE_MISS_KEY, "{true:1,");
+    TEST_ERROR(DULL_PARSE_MISS_KEY, "{false:1,");
+    TEST_ERROR(DULL_PARSE_MISS_KEY, "{null:1,");
+    TEST_ERROR(DULL_PARSE_MISS_KEY, "{[]:1,");
+    TEST_ERROR(DULL_PARSE_MISS_KEY, "{{}:1,");
+    TEST_ERROR(DULL_PARSE_MISS_KEY, "{\"a\":1,");
+}
+
+static void test_parse_miss_colon() {
+    TEST_ERROR(DULL_PARSE_MISS_COLON, "{\"a\"}");
+    TEST_ERROR(DULL_PARSE_MISS_COLON, "{\"a\",\"b\"}");
+}
+
+static void test_parse_miss_comma_or_curly_bracket() {
+    TEST_ERROR(DULL_PARSE_MISS_COMMA_OR_CURLY_BRACKET, "{\"a\":1");
+    TEST_ERROR(DULL_PARSE_MISS_COMMA_OR_CURLY_BRACKET, "{\"a\":1]");
+    TEST_ERROR(DULL_PARSE_MISS_COMMA_OR_CURLY_BRACKET, "{\"a\":1 \"b\"");
+    TEST_ERROR(DULL_PARSE_MISS_COMMA_OR_CURLY_BRACKET, "{\"a\":{}");
+}
+
 static void test_parse() {
     test_parse_null();
     test_parse_true();
@@ -270,6 +352,8 @@ static void test_parse() {
     test_parse_number();
     test_parse_string();
     test_parse_array();
+    test_parse_object();
+
     test_parse_expect_value();
     test_parse_invalid_value();
     test_parse_root_not_singular();
@@ -280,6 +364,9 @@ static void test_parse() {
     test_parse_invalid_unicode_hex();
     test_parse_invalid_unicode_surrogate();
     test_parse_miss_comma_or_square_bracket();
+    test_parse_miss_key();
+    test_parse_miss_colon();
+    test_parse_miss_comma_or_curly_bracket();
 }
 
 static void test_access_null() {
@@ -295,7 +382,6 @@ static void test_access_boolean() {
     dull_value v;
     DULL_INIT(&v);
     dull_set_string(&v, "a", 1);
-
     dull_set_boolean(&v, 1);
     EXPECT_TRUE(dull_get_boolean(&v));
     dull_set_boolean(&v, 0);
@@ -330,15 +416,6 @@ static void test_access() {
 }
 
 int main() {
-    // char* expect = "Hello\nWorld";
-    // char* json = "\"Hello\\nWorld\"";
-    // dull_value v;
-    // DULL_INIT(&v);
-    // EXPECT_EQ_INT(DULL_PARSE_OK, dull_parse(&v, json));
-    // EXPECT_EQ_INT(DULL_STRING, dull_get_type(&v));
-    // EXPECT_EQ_STRING(expect, dull_get_string(&v), dull_get_string_length(&v));
-    // dull_free(&v);
-    // return 0;
 #ifdef _WINDOWS
     _CrtSetDbgFlag(_CRTDBG_ALLOC_MEM_DF | _CRTDBG_LEAK_CHECK_DF);
 #endif
